@@ -1,0 +1,91 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: syllabiq_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-syllabiq_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-syllabiq_password}
+      POSTGRES_DB: ${DB_NAME:-syllabiq_db}
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./backend/src/database/migrations/001_initial_schema.sql:/docker-entrypoint-initdb.d/001_initial_schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-syllabiq_user} -d ${DB_NAME:-syllabiq_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - syllabiq_network
+
+  redis:
+    image: redis:7-alpine
+    container_name: syllabiq_redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - syllabiq_network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: syllabiq_backend
+    restart: unless-stopped
+    environment:
+      NODE_ENV: development
+      PORT: 4000
+      DATABASE_URL: postgresql://${DB_USER:-syllabiq_user}:${DB_PASSWORD:-syllabiq_password}@postgres:5432/${DB_NAME:-syllabiq_db}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:-syllabiq_jwt_access_secret_key_super_secure_2026}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-syllabiq_jwt_refresh_secret_key_super_secure_2026}
+      PDFCO_API_KEY: ${PDFCO_API_KEY:-}
+      JWT_ACCESS_EXPIRES_IN: 15m
+      JWT_REFRESH_EXPIRES_IN: 7d
+      CORS_ORIGIN: http://localhost:5173
+    ports:
+      - "4000:4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - syllabiq_network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: syllabiq_frontend
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_BASE_URL=http://localhost:4000/api
+    depends_on:
+      - backend
+    networks:
+      - syllabiq_network
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  syllabiq_network:
+    driver: bridge
